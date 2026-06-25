@@ -655,10 +655,26 @@ ${navPoints}  </navMap>
     return new Uint8Array(decrypted);
   }
 
-  function generateChaptersFile(chapters, title) {
-    // ffmpeg metadata format
+  function generateChaptersFile(chapters, productData) {
+    const title = productData.title || 'Unknown';
+    const authors = (productData.authors || []).map(a => a.name || a).join(', ');
+    const narrators = (productData.narrators || []).map(n => n.name || n).join(', ');
+    const description = productData.description_full || '';
+    const series = productData.series ? productData.series.name : '';
+    const volume = productData.volume || '';
+
     let out = ';FFMETADATA1\n';
-    out += `title=${title}\n\n`;
+    out += `title=${title}\n`;
+    out += `artist=${authors}\n`;
+    out += `album_artist=${authors}\n`;
+    out += `composer=${narrators}\n`;
+    out += `comment=Narrator: ${narrators}\n`;
+    if (series) out += `album=${series}\n`;
+    if (volume) out += `track=${volume}\n`;
+    if (description) out += `description=${description.replace(/\n/g, ' ')}\n`;
+    out += `genre=Audiobook\n`;
+    out += '\n';
+
     for (const ch of chapters) {
       out += '[CHAPTER]\n';
       out += 'TIMEBASE=1/1000\n';
@@ -756,7 +772,7 @@ ${navPoints}  </navMap>
         title: f.title,
         index: i,
       }));
-      const chaptersText = generateChaptersFile(chapters, title);
+      const chaptersText = generateChaptersFile(chapters, productData);
       const chaptersBlob = new Blob([chaptersText], { type: 'text/plain' });
       saveBlob(chaptersBlob, `${title}.chapters.txt`);
 
