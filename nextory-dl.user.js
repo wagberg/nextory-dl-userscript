@@ -74,9 +74,8 @@
       const btn = document.createElement('button');
       btn.id = 'nextory-dl-audio-btn';
       btn.textContent = 'Download Audiobook';
-      btn.style.cssText = btnStyle + 'background: #666; cursor: not-allowed; opacity: 0.7;';
-      btn.title = 'Coming soon';
-      btn.disabled = true;
+      btn.style.cssText = btnStyle + 'background: #9c27b0;';
+      btn.addEventListener('click', onAudioDownloadClick);
       container.appendChild(btn);
     }
 
@@ -104,11 +103,13 @@
   }
 
   function setButtonEnabled(enabled) {
-    const btn = document.getElementById('nextory-dl-btn');
-    if (btn) {
-      btn.disabled = !enabled;
-      btn.style.opacity = enabled ? '1' : '0.5';
-      btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+    for (const id of ['nextory-dl-btn', 'nextory-dl-audio-btn']) {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.disabled = !enabled;
+        btn.style.opacity = enabled ? '1' : '0.5';
+        btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+      }
     }
   }
 
@@ -146,7 +147,7 @@
         responseType: opts.responseType || 'json',
         onload: (res) => {
           if (res.status >= 200 && res.status < 300) {
-            resolve(res.response);
+            resolve(opts.responseType === 'text' ? res.responseText : res.response);
           } else {
             reject(new Error(`HTTP ${res.status}: ${url}`));
           }
@@ -584,6 +585,182 @@ ${navPoints}  </navMap>
       const filename = `${title}.epub`;
       saveBlob(blob, filename);
       setStatus(`Done! Saved ${filename}`);
+      setTimeout(() => setStatus(''), 5000);
+
+    } catch (err) {
+      setStatus(`Error: ${err.message}`);
+      console.error('[Nextory DL]', err);
+    } finally {
+      downloading = false;
+      setButtonEnabled(true);
+    }
+  }
+
+  // --- Audiobook Download ---
+
+  async function getAudioPackage(formatId) {
+    return gmFetch('GET', `https://api.nextory.com/reader/books/${formatId}/packages/audio`, {
+      headers: authHeaders,
+    });
+  }
+
+  function findHlsFormat(productData) {
+    for (const fmt of productData.formats || []) {
+      if (fmt.type === 'hls') return fmt.identifier;
+    }
+    throw new Error('No audiobook format found for this book');
+  }
+
+  function parsePlaylist(playlistText) {
+    const segments = [];
+    let encrypted = false;
+    let keyUrl = null;
+    let iv = null;
+
+    for (const line of playlistText.split('\n')) {
+      if (line.startsWith('#EXT-X-KEY')) {
+        if (line.includes('METHOD=NONE')) {
+          encrypted = false;
+        } else if (line.includes('METHOD=AES-128')) {
+          encrypted = true;
+          const uriMatch = line.match(/URI="([^"]+)"/);
+          const ivMatch = line.match(/IV=0x([0-9a-fA-F]+)/);
+          keyUrl = uriMatch ? uriMatch[1] : null;
+          iv = ivMatch ? ivMatch[1] : null;
+        }
+      } else if (line.startsWith('http')) {
+        segments.push({ url: line.trim(), encrypted, keyUrl, iv });
+      }
+    }
+    return segments;
+  }
+
+  async function fetchAndDecryptSegment(seg, keyCache) {
+    const data = await gmFetchBinary(seg.url);
+    if (!seg.encrypted) return new Uint8Array(data);
+
+    // Get or cache key
+    if (!keyCache[seg.keyUrl]) {
+      keyCache[seg.keyUrl] = await gmFetchBinary(seg.keyUrl, authHeaders);
+    }
+    const keyBytes = new Uint8Array(keyCache[seg.keyUrl]);
+    const ivBytes = new Uint8Array(seg.iv.match(/.{2}/g).map(b => parseInt(b, 16)));
+
+    const cryptoKey = await crypto.subtle.importKey(
+      'raw', keyBytes, { name: 'AES-CBC' }, false, ['decrypt']
+    );
+    const decrypted = await crypto.subtle.decrypt(
+      { name: 'AES-CBC', iv: ivBytes }, cryptoKey, data
+    );
+    return new Uint8Array(decrypted);
+  }
+
+  function generateChaptersFile(chapters, title) {
+    // ffmpeg metadata format
+    let out = ';FFMETADATA1\n';
+    out += `title=${title}\n\n`;
+    for (const ch of chapters) {
+      out += '[CHAPTER]\n';
+      out += 'TIMEBASE=1/1000\n';
+      out += `START=${ch.start_at}\n`;
+      out += `END=${ch.start_at + ch.duration}\n`;
+      out += `title=${ch.title || 'Chapter ' + (ch.index + 1)}\n\n`;
+    }
+    return out;
+  }
+
+  async function onAudioDownloadClick() {
+    if (downloading) return;
+    downloading = true;
+    setButtonEnabled(false);
+
+    try {
+      setStatus('Getting credentials...');
+      const creds = await getCredentials();
+      if (!creds) { setStatus(''); return; }
+
+      setStatus('Authenticating...');
+      try {
+        await authenticate(creds.username, creds.password);
+      } catch (e) {
+        await clearCredentials();
+        throw new Error(`Authentication failed: ${e.message}`);
+      }
+
+      setStatus('Fetching book info...');
+      const bookId = extractBookId(window.location.href);
+      const productData = await getProductData(bookId);
+      const title = productData.title || 'audiobook';
+      const hlsId = findHlsFormat(productData);
+
+      setStatus('Fetching audio info...');
+      const audioPackage = await getAudioPackage(hlsId);
+      const files = audioPackage.files;
+      const totalDuration = audioPackage.duration;
+
+      setStatus(`Found: ${title} (${files.length} chapters, ${Math.round(totalDuration / 60000)} min)`);
+
+      // Download all chapters
+      const allSegments = [];
+      const keyCache = {};
+      let totalSegments = 0;
+      let downloadedSegments = 0;
+
+      // First pass: get all playlists to count total segments
+      const chapterPlaylists = [];
+      for (let i = 0; i < files.length; i++) {
+        setStatus(`Fetching playlist ${i + 1}/${files.length}...`);
+        const mediaUrl = files[i].uri.replace('/master_playlist', '/media_playlist.m3u8');
+        const playlistText = await gmFetch('GET', mediaUrl, {
+          headers: authHeaders,
+          responseType: 'text',
+        });
+        const segments = parsePlaylist(playlistText);
+        chapterPlaylists.push(segments);
+        totalSegments += segments.length;
+      }
+
+      // Second pass: download all segments
+      const CONCURRENT = 4;
+      for (let i = 0; i < chapterPlaylists.length; i++) {
+        const segments = chapterPlaylists[i];
+        for (let start = 0; start < segments.length; start += CONCURRENT) {
+          const batch = segments.slice(start, start + CONCURRENT);
+          const results = await Promise.all(
+            batch.map(seg => fetchAndDecryptSegment(seg, keyCache))
+          );
+          allSegments.push(...results);
+          downloadedSegments += results.length;
+          setStatus(`Downloading audio... ${downloadedSegments}/${totalSegments}`);
+        }
+      }
+
+      // Concatenate all AAC segments
+      setStatus('Building audio file...');
+      const totalSize = allSegments.reduce((sum, s) => sum + s.length, 0);
+      const combined = new Uint8Array(totalSize);
+      let offset = 0;
+      for (const seg of allSegments) {
+        combined.set(seg, offset);
+        offset += seg.length;
+      }
+
+      // Save AAC file
+      const aacBlob = new Blob([combined], { type: 'audio/aac' });
+      saveBlob(aacBlob, `${title}.aac`);
+
+      // Save chapters file
+      const chapters = files.map((f, i) => ({
+        start_at: f.start_at,
+        duration: f.duration,
+        title: f.title,
+        index: i,
+      }));
+      const chaptersText = generateChaptersFile(chapters, title);
+      const chaptersBlob = new Blob([chaptersText], { type: 'text/plain' });
+      saveBlob(chaptersBlob, `${title}.chapters.txt`);
+
+      setStatus(`Done! Saved ${title}.aac + chapters file`);
       setTimeout(() => setStatus(''), 5000);
 
     } catch (err) {
