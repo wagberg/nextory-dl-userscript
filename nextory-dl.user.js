@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Nextory EPUB Downloader
+// @name         Nextory Downloader
 // @namespace    https://github.com/ballaballaballa/nextory-dl-userscript
 // @version      1.0.0
-// @description  Download EPUB books from Nextory
+// @description  Download ebooks and audiobooks from Nextory
 // @match        https://www.nextory.com/*/book/*
 // @match        https://nextory.com/*/book/*
 // @grant        GM_xmlhttpRequest
