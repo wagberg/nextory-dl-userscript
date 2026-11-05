@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nextory Downloader
 // @namespace    https://github.com/ballaballaballa/nextory-dl-userscript
-// @version      1.0.0
+// @version      1.0.1
 // @description  Download ebooks and audiobooks from Nextory
 // @match        https://www.nextory.com/*/book/*
 // @match        https://nextory.com/*/book/*
