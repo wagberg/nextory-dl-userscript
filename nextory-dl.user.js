@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nextory Downloader
 // @namespace    https://github.com/wagberg/nextory-dl-userscript
-// @version      1.0.4
+// @version      1.0.5
 // @description  Download ebooks and audiobooks from Nextory
 // @match        https://www.nextory.com/*/book/*
 // @match        https://nextory.com/*/book/*
@@ -296,8 +296,20 @@
   // --- Decryption ---
 
   function fixKey(value) {
-    // Strip last character, then base64-decode
-    const b64 = value.slice(0, -1);
+    // The API returns the key/IV as base64, but some responses carry a stray
+    // trailing character, whitespace, or use URL-safe base64. Normalize the
+    // string before decoding so `atob` doesn't throw
+    // "String contains an invalid character".
+    if (value === undefined || value === null) {
+      throw new Error('Missing encryption key/IV');
+    }
+    let b64 = String(value)
+      .replace(/\s+/g, '')
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .replace(/[^A-Za-z0-9+/]/g, '');
+    const rem = b64.length % 4;
+    if (rem) b64 += '='.repeat(4 - rem);
     const binary = atob(b64);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -574,8 +586,13 @@ ${navPoints}  </navMap>
       // Package data
       setStatus('Fetching download info...');
       const epubPackage = await getEpubPackage(epubId);
-      const key = fixKey(epubPackage.crypt_key);
-      const iv = fixKey(epubPackage.crypt_iv);
+      let key, iv;
+      try {
+        key = fixKey(epubPackage.crypt_key);
+        iv = fixKey(epubPackage.crypt_iv);
+      } catch (e) {
+        throw new Error(`Failed to decode encryption key/IV: ${e.message}`, { cause: e });
+      }
       const spines = epubPackage.spines;
       const tocData = epubPackage.toc;
 
