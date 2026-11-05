@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nextory Downloader
 // @namespace    https://github.com/ballaballaballa/nextory-dl-userscript
-// @version      1.0.1
+// @version      1.0.2
 // @description  Download ebooks and audiobooks from Nextory
 // @match        https://www.nextory.com/*/book/*
 // @match        https://nextory.com/*/book/*
@@ -10,9 +10,13 @@
 // @grant        GM_getValue
 // @grant        GM_deleteValue
 // @require      https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js
+// @downloadURL  https://raw.githubusercontent.com/wagberg/nextory-dl-userscript/main/nextory-dl.user.js
+// @updateURL    https://raw.githubusercontent.com/wagberg/nextory-dl-userscript/main/nextory-dl.user.js
 // @connect      api.nextory.com
 // @connect      *
 // ==/UserScript==
+
+/* global fflate */
 
 (function () {
   'use strict';
@@ -152,7 +156,7 @@
             reject(new Error(`HTTP ${res.status}: ${url}`));
           }
         },
-        onerror: (err) => reject(new Error(`Network error: ${url}`)),
+        onerror: () => reject(new Error(`Network error: ${url}`)),
         ontimeout: () => reject(new Error(`Timeout: ${url}`)),
       });
     });
@@ -250,7 +254,7 @@
       let data;
       try {
         data = JSON.parse(script.textContent);
-      } catch (e) {
+      } catch {
         continue;
       }
       const nodes = data['@graph'] || (Array.isArray(data) ? data : [data]);
@@ -494,7 +498,7 @@ ${navPoints}  </navMap>
 
     // Build zip using fflate
     const zipData = {};
-    zipData['mimetype'] = [enc.encode('application/epub+zip'), { level: 0 }];
+    zipData.mimetype = [enc.encode('application/epub+zip'), { level: 0 }];
     zipData['META-INF/container.xml'] = enc.encode(`<?xml version="1.0" encoding="UTF-8"?>
 <container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
   <rootfiles>
@@ -551,7 +555,7 @@ ${navPoints}  </navMap>
         await authenticate(creds.username, creds.password);
       } catch (e) {
         await clearCredentials();
-        throw new Error(`Authentication failed: ${e.message}`);
+        throw new Error(`Authentication failed: ${e.message}`, { cause: e });
       }
 
       // Book info
@@ -731,7 +735,7 @@ ${navPoints}  </navMap>
         await authenticate(creds.username, creds.password);
       } catch (e) {
         await clearCredentials();
-        throw new Error(`Authentication failed: ${e.message}`);
+        throw new Error(`Authentication failed: ${e.message}`, { cause: e });
       }
 
       setStatus('Fetching book info...');
