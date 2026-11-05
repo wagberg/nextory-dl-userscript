@@ -242,6 +242,30 @@
     return url.split('-').pop().replace(/\//g, '');
   }
 
+  function extractIsbnFromPage(formatType) {
+    // The API product schema has no ISBN; the web page exposes it via JSON-LD
+    // (schema.org Book), with one `workExample` per format (ebook vs audiobook).
+    const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+    for (const script of scripts) {
+      let data;
+      try {
+        data = JSON.parse(script.textContent);
+      } catch (e) {
+        continue;
+      }
+      const nodes = data['@graph'] || (Array.isArray(data) ? data : [data]);
+      for (const node of nodes) {
+        for (const ex of node.workExample || []) {
+          const fmt = ((ex.bookFormat || '') + ' ' + (ex['@type'] || '')).toLowerCase();
+          const isAudiobook = fmt.includes('audiobook');
+          const matches = formatType === 'audiobook' ? isAudiobook : !isAudiobook;
+          if (matches && ex.isbn) return String(ex.isbn);
+        }
+      }
+    }
+    return '';
+  }
+
   async function getProductData(bookId) {
     return gmFetch('GET', `https://api.nextory.com/library/v1/products/${bookId}`, {
       headers: authHeaders,
@@ -439,6 +463,10 @@
     const authors = (metadata.authors || []).map(a => a.name || a).join(', ');
     const language = metadata.language || 'en';
     const isbn = metadata.isbn || '';
+    const description = metadata.description_full || metadata.blurb || '';
+    const series = metadata.series ? metadata.series.name : '';
+    const volume = (metadata.volume === undefined || metadata.volume === null)
+      ? '' : String(metadata.volume);
 
     const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
@@ -447,7 +475,7 @@
     <dc:creator opf:role="aut">${escapeXml(authors)}</dc:creator>
     <dc:language>${escapeXml(language)}</dc:language>
     <dc:identifier id="BookId">${escapeXml(isbn)}</dc:identifier>
-  </metadata>
+${description ? `    <dc:description>${escapeXml(description)}</dc:description>\n` : ''}${series ? `    <meta name="calibre:series" content="${escapeXml(series)}"/>\n` : ''}${volume ? `    <meta name="calibre:series_index" content="${escapeXml(volume)}"/>\n` : ''}  </metadata>
   <manifest>
 ${manifestItems}  </manifest>
   <spine toc="ncx">
@@ -579,7 +607,10 @@ ${navPoints}  </navMap>
 
       // Build EPUB
       setStatus('Building EPUB...');
-      const blob = buildEpub(htmlContentMap, assetMap, tocOrder, productData);
+      const blob = buildEpub(htmlContentMap, assetMap, tocOrder, {
+        ...productData,
+        isbn: extractIsbnFromPage('ebook'),
+      });
 
       // Save
       const filename = `${title}.epub`;
