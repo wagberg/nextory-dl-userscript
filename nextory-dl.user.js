@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Nextory Downloader
 // @namespace    https://github.com/wagberg/nextory-dl-userscript
-// @version      1.0.3
+// @version      1.0.4
 // @description  Download ebooks and audiobooks from Nextory
 // @match        https://www.nextory.com/*/book/*
 // @match        https://nextory.com/*/book/*
@@ -279,10 +279,10 @@
 
   function findEpubFormat(productData) {
     for (const fmt of productData.formats || []) {
-      if (fmt.type === 'epub') return fmt.identifier;
+      if (fmt.type === 'epub') return fmt;
     }
     for (const fmt of productData.formats || []) {
-      if (fmt.type === 'pdf') return fmt.identifier;
+      if (fmt.type === 'pdf') return fmt;
     }
     throw new Error('No epub/pdf format found for this book');
   }
@@ -472,13 +472,15 @@
     const series = metadata.series ? metadata.series.name : '';
     const volume = (metadata.volume === undefined || metadata.volume === null)
       ? '' : String(metadata.volume);
+    const publisher = metadata.publisher || '';
+    const publicationDate = metadata.publicationDate || '';
 
     const contentOpf = `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="BookId" version="2.0">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:opf="http://www.idpf.org/2007/opf">
     <dc:title>${escapeXml(title)}</dc:title>
     <dc:creator opf:role="aut">${escapeXml(authors)}</dc:creator>
-    <dc:language>${escapeXml(language)}</dc:language>
+${publisher ? `    <dc:publisher>${escapeXml(publisher)}</dc:publisher>\n` : ''}${publicationDate ? `    <dc:date>${escapeXml(publicationDate)}</dc:date>\n` : ''}    <dc:language>${escapeXml(language)}</dc:language>
     <dc:identifier id="BookId">${escapeXml(isbn)}</dc:identifier>
 ${description ? `    <dc:description>${escapeXml(description)}</dc:description>\n` : ''}${series ? `    <meta name="calibre:series" content="${escapeXml(series)}"/>\n` : ''}${volume ? `    <meta name="calibre:series_index" content="${escapeXml(volume)}"/>\n` : ''}  </metadata>
   <manifest>
@@ -564,7 +566,8 @@ ${navPoints}  </navMap>
       const bookId = extractBookId(window.location.href);
       const productData = await getProductData(bookId);
       const title = productData.title || 'book';
-      const epubId = findEpubFormat(productData);
+      const epubFormat = findEpubFormat(productData);
+      const epubId = epubFormat.identifier;
 
       setStatus(`Found: ${title}`);
 
@@ -615,6 +618,8 @@ ${navPoints}  </navMap>
       const blob = buildEpub(htmlContentMap, assetMap, tocOrder, {
         ...productData,
         isbn: extractIsbnFromPage('ebook'),
+        publisher: epubFormat.publisher ? epubFormat.publisher.name : '',
+        publicationDate: epubFormat.publication_date || '',
       });
 
       // Save
